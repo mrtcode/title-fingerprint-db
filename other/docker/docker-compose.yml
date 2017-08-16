@@ -1,0 +1,18 @@
+version: "2"
+services:
+  title-fingerprint-db:
+    build: ./
+    volumes:
+      - ./db:/data/db
+    ports:
+      - "localhost:8003:80"
+    networks:
+      identifier:
+        ipv4_address: 172.13.5.2
+networks:
+  identifier:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.13.5.0/24
+          gateway: 172.13.5.1
