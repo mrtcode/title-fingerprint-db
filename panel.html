@@ -1,0 +1,107 @@
+<html>
+<head>
+    <title>title-fingerprint-db</title>
+</head>
+<body>
+<div style="display: flex;">
+    <div style="flex: 1;padding: 10px">
+        <p>
+            <button id="identify_btn">Identify</button>
+        </p>
+        <p><textarea id="identify_text" style="width:100%;height:300px;" placeholder="Text to identify"></textarea></p>
+        <p id="identify_result"></p>
+        <p id="identify_crossref_result"></p>
+    </div>
+
+    <div style="flex: 1;padding: 10px">
+        <p>
+            <button id="index_btn">Index</button>
+        </p>
+        <p><textarea id="index_title" type="text" style="width:100%;height:50px;" placeholder="Title"></textarea></p>
+        <p><input id="index_name" type="text" placeholder="Last name"></p>
+        <p><input id="index_ids" type="text" placeholder="id1,id2,id3"></p>
+        <p id="index_result"></p>
+    </div>
+
+</div>
+
+</body>
+<script>
+    document.getElementById('identify_btn').addEventListener('click', function () {
+        var result = document.getElementById('identify_result').innerHTML = '';
+        document.getElementById('identify_crossref_result').innerHTML = '';
+        fetch('/identify', {
+            method: "POST",
+            headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                text: document.getElementById('identify_text').value
+            })
+        })
+            .then(function (res) {
+                return res.json();
+            })
+            .then(function (data) {
+                var html = '';
+                for (var key in data) {
+                    html += '<p><b>' + key + ':</b> ' + data[key] + '</p>';
+                }
+
+                document.getElementById('identify_result').innerHTML = html;
+
+                var crossrefUrl = 'http://api.crossref.org/works?query.title=' + data.title + '&query.author=' + data.name;
+
+                fetch(crossrefUrl, {
+                    method: "GET"
+                })
+                    .then(function (res) {
+                        return res.json();
+                    })
+                    .then(function (data) {
+                        console.log(data);
+
+                        var html = '';
+
+                        html += '<p><b><a target="_blank" href="' + crossrefUrl + '">Crossref:</a></b></p>';
+
+                        data.message.items.forEach(function (item) {
+                            console.log(item.title[0]);
+                            html += '<p>' + item.title[0] + ' <a target="_blank" href="' + item.URL + '">' + item.DOI + '</a></p>';
+                        });
+
+                        document.getElementById('identify_crossref_result').innerHTML = html;
+
+                    })
+
+            })
+    });
+
+    document.getElementById('index_btn').addEventListener('click', function () {
+        var result = document.getElementById('index_result').innerHTML = '';
+        fetch('/index', {
+            method: "POST",
+            headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify([{
+                title: document.getElementById('index_title').value,
+                name: document.getElementById('index_name').value,
+                ids: document.getElementById('index_ids').value
+            }])
+        })
+            .then(function (res) {
+                return res.json();
+            })
+            .then(function (data) {
+                var html = '';
+                for (var key in data) {
+                    html += '<p><b>' + key + ':</b> ' + data[key] + '</p>';
+                }
+                document.getElementById('index_result').innerHTML = html;
+            })
+    });
+</script>
+</html>
