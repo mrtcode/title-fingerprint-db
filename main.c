@@ -306,7 +306,7 @@ int main(int argc, char **argv) {
     onion_url_add(urls, "identify", url_identify);
     onion_url_add(urls, "index", url_index);
     onion_url_add(urls, "stats", url_stats);
-    onion_url_add_handler(urls, "panel", onion_handler_export_local_new("../panel.html") );
+    onion_url_add_handler(urls, "panel", onion_handler_export_local_new("static/panel.html") );
 
     printf("listening on port %s\n", opt_port);
 
