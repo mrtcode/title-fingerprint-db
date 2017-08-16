@@ -198,6 +198,7 @@ void *saver_thread(void *arg) {
 
     while (1) {
         usleep(10000);
+        fflush(stdout);
 
         if (!t_updated.tv_sec) {
             continue;
