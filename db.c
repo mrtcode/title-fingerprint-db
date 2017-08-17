@@ -232,10 +232,6 @@ int db_insert_identifier(uint32_t meta_id, uint8_t *identifier, uint32_t identif
     }
 
     identifiers_in_transaction++;
-
-    if (identifiers_in_transaction > 5000000) {
-        //di_save();
-    }
 }
 
 int db_get_identifiers(uint32_t id, uint8_t *identifiers, uint32_t identifiers_max_len) {
@@ -273,7 +269,7 @@ int db_get_identifiers(uint32_t id, uint8_t *identifiers, uint32_t identifiers_m
 }
 
 
-int save_hashtable(row_t *rows, uint32_t rows_len) {
+int db_save_hashtable(row_t *rows, uint32_t rows_len) {
     char *sql;
     char *err_msg;
     int rc;
@@ -334,7 +330,7 @@ int save_hashtable(row_t *rows, uint32_t rows_len) {
     return 1;
 }
 
-int load_hashtable(row_t *rows) {
+int db_load_hashtable(row_t *rows) {
     int rc;
     const char sql[] = "SELECT id, data FROM hashtable";
     sqlite3_stmt *stmt = NULL;

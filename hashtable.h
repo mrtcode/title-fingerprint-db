@@ -5,13 +5,10 @@
 
 #define HASHTABLE_SIZE 16777216
 #define ROW_SLOTS_MAX 65536
-#define MAX_SLOTS_PER_TITLE 20
-
-#define MAX_TITLE_LEN 1000
+#define MAX_SLOTS_PER_TITLE 5
+#define MAX_TITLE_LEN 1024
 #define MAX_NAME_LEN 64
-
 #define MAX_LOOKUP_TEXT_LEN 4096
-
 
 typedef struct stats {
     uint32_t used_hashes;
@@ -50,13 +47,9 @@ typedef struct result {
 } result_t;
 
 uint32_t init_icu();
-
 uint32_t identify(uint8_t *text, result_t *result);
-
 uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *ids);
-
 uint32_t load();
-
 stats_t get_stats();
 
 #endif //TITLE_FINGERPRINT_DB_HASHTABLE_H

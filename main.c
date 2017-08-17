@@ -35,6 +35,7 @@
 
 extern row_t rows[HASHTABLE_SIZE];
 extern struct timeval t_updated;
+extern uint32_t identifiers_in_transaction;
 
 onion *on = NULL;
 
@@ -71,7 +72,7 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
     struct timeval st, et;
 
 
-    result_t result={0};
+    result_t result;
     pthread_rwlock_rdlock(&rwlock);
 
     gettimeofday(&st, NULL);
@@ -130,11 +131,11 @@ onion_connection_status url_index(void *_, onion_request *req, onion_response *r
                 if (json_is_object(el)) {
                     json_t *json_title = json_object_get(el, "title");
                     json_t *json_name = json_object_get(el, "name");
-                    json_t *json_ids = json_object_get(el, "ids");
+                    json_t *json_identifiers = json_object_get(el, "identifiers");
                     uint8_t *title = json_string_value(json_title);
                     uint8_t *name = json_string_value(json_name);
-                    uint8_t *ids = json_string_value(json_ids);
-                    if(index_title(title, name, ids))
+                    uint8_t *identifiers = json_string_value(json_identifiers);
+                    if (index_title(title, name, identifiers))
                         indexed++;
                 }
             }
@@ -186,11 +187,11 @@ onion_connection_status url_stats(void *_, onion_request *req, onion_response *r
 
 int save() {
     printf("saving..\n");
-    db_save_identifiers();
     pthread_rwlock_rdlock(&rwlock);
-    save_hashtable(rows, HASHTABLE_SIZE);
+    db_save_identifiers();
+    db_save_hashtable(rows, HASHTABLE_SIZE);
     pthread_rwlock_unlock(&rwlock);
-    printf("saving done\n");
+    printf("..saving done\n");
 }
 
 void *saver_thread(void *arg) {
@@ -205,14 +206,12 @@ void *saver_thread(void *arg) {
         }
 
         gettimeofday(&t_current, NULL);
-        if (t_current.tv_sec - t_updated.tv_sec < 10) {
-            continue;
+        if (t_current.tv_sec - t_updated.tv_sec >= 10
+            || identifiers_in_transaction > 50000000) {
+            save();
+            t_updated.tv_sec = 0;
+            t_updated.tv_usec = 0;
         }
-
-        save();
-
-        t_updated.tv_sec = 0;
-        t_updated.tv_usec = 0;
     }
 }
 
@@ -226,7 +225,7 @@ void signal_handler(int signum) {
     printf("saving db\n");
     save();
     printf("closing db\n");
-    if(!db_close()) {
+    if (!db_close()) {
         fprintf(stderr, "db close failed\n");
         return;
     }
@@ -244,10 +243,8 @@ int main(int argc, char **argv) {
     char *opt_port = 0;
 
     int opt;
-    while ((opt = getopt (argc, argv, "d:p:")) != -1)
-    {
-        switch (opt)
-        {
+    while ((opt = getopt(argc, argv, "d:p:")) != -1) {
+        switch (opt) {
             case 'd':
                 opt_db_directory = optarg;
                 break;
@@ -257,7 +254,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    if(!opt_db_directory || !opt_port) {
+    if (!opt_db_directory || !opt_port) {
         print_usage();
         return EXIT_FAILURE;
     }
@@ -307,7 +304,7 @@ int main(int argc, char **argv) {
     onion_url_add(urls, "identify", url_identify);
     onion_url_add(urls, "index", url_index);
     onion_url_add(urls, "stats", url_stats);
-    onion_url_add_handler(urls, "panel", onion_handler_export_local_new("static/panel.html") );
+    onion_url_add_handler(urls, "panel", onion_handler_export_local_new("static/panel.html"));
 
     printf("listening on port %s\n", opt_port);
 

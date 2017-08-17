@@ -85,55 +85,7 @@ uint32_t init_icu() {
     return 1;
 }
 
-uint8_t *normalize(const char *text, int32_t text_len) {
-    UErrorCode status = U_ZERO_ERROR;
-
-    uint32_t target_len = UCNV_GET_MAX_BYTES_FOR_STRING(text_len, ucnv_getMaxCharSize(converter));
-    UChar *uc1 = malloc(target_len);
-    ucnv_toUChars(converter, uc1, target_len, text, text_len, &status);
-
-    uint32_t limit = u_strlen(uc1);
-    utrans_transUChars(transliterator, uc1, 0, target_len, 0, &limit, &status);
-
-    char *target = malloc(target_len);
-    ucnv_fromUChars(converter, target, target_len, uc1, u_strlen(uc1), &status);
-
-    free(uc1);
-
-    return target;
-}
-
-uint32_t tokenize(uint8_t *text, uint32_t text_len, token_t *tokens, uint32_t *len) {
-    uint32_t tokens_len = 0;
-    UText *ut = NULL;
-    UBreakIterator *bi = NULL;
-    UErrorCode status = U_ZERO_ERROR;
-
-    ut = utext_openUTF8(ut, text, text_len, &status);
-    bi = ubrk_open(UBRK_WORD, 0, NULL, 0, &status);
-
-    ubrk_setUText(bi, ut, &status);
-    uint32_t start = 0, pos;
-    while ((pos = ubrk_next(bi)) != UBRK_DONE) {
-        if (ubrk_getRuleStatus(bi) != UBRK_WORD_NONE) {
-            tokens[tokens_len].start = start;
-            tokens[tokens_len].len = pos - start;
-            tokens_len++;
-        }
-        start = pos;
-    }
-
-    utext_close(ut);
-    ubrk_close(bi);
-
-    *len = tokens_len;
-
-    return tokens_len;
-}
-
-
-
-uint8_t *process(uint8_t *text, uint32_t text_len, token_t *tokens, uint32_t *tokens_len) {
+uint8_t *process_text(uint8_t *text, uint32_t text_len, token_t *tokens, uint32_t *tokens_len) {
     UErrorCode status = U_ZERO_ERROR;
 
     uint32_t target_len = UCNV_GET_MAX_BYTES_FOR_STRING(text_len, ucnv_getMaxCharSize(converter));
@@ -283,15 +235,13 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     static token_t tokens[MAX_TITLE_LEN];
     uint32_t tokens_len;
 
-    title = process(title, title_len, tokens, &tokens_len);
+    title = process_text(title, title_len, tokens, &tokens_len);
 
 
     static token_t name_tokens[MAX_NAME_LEN];
     uint32_t name_tokens_len;
 
-    name = process(name, name_len, name_tokens, &name_tokens_len);
-    name_len = strlen(name);
-
+    name = process_text(name, name_len, name_tokens, &name_tokens_len);
 
     //print_ngram(title, tokens, 0, tokens_len);
     uint64_t hash = get_ngram_hash56(title, tokens, 0, tokens_len);
@@ -311,9 +261,11 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     name_fingerprint = (((uint64_t) name_hash28) << 6) | extracted_name_len;
 
     uint32_t meta_id = 0;
+    uint8_t article_exists = 0;
     for (uint32_t i = 0; i < slots_len; i++) {
         if ((slots[i].data & 0x3FFFFFFFF) == name_fingerprint) {
             printf("article already exists\n");
+            article_exists = 1;
             meta_id = slots[i].data >> 34;
             break;
         }
@@ -327,25 +279,40 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
             return 0;
         }
         meta_id = ++last_meta_id;
+    }
+
+
+
+    uint32_t inserted = 0;
+
+    if(identifiers) {
+        uint8_t *p = identifiers;
+        uint8_t *s;
+
+        while (1) {
+            while (*p == ',' || *p == ' ') p++;
+            if (!*p) break;
+            s = p;
+            while (*p && *p != ',' && *p != ' ') p++;
+
+            db_insert_identifier(meta_id, s, p - s);
+
+            inserted++;
+
+            if (!*p) break;
+        }
+    }
+
+    if(!article_exists) {
+        if (!inserted) {
+            // Don't set article_id for titles that don't have any identifiers associated
+            last_meta_id--;
+            meta_id = 0;
+        }
+
         uint64_t data = (((uint64_t) meta_id) << 34) | name_fingerprint;
         add_slot(hash, data);
     }
-
-
-    uint8_t *p = identifiers;
-    uint8_t *s;
-
-    while (1) {
-        while(*p==',' || *p==' ') p++;
-        if(!*p) break;
-        s=p;
-        while(*p && *p!=',' && *p!=' ') p++;
-
-        db_insert_identifier(meta_id, s, p - s);
-
-        if (!*p) break;
-    }
-
 
     free(title);
     free(name);
@@ -417,7 +384,7 @@ uint32_t identify(uint8_t *text, result_t *result) {
     token_t tokens[MAX_LOOKUP_TEXT_LEN];
     uint32_t tokens_len;
 
-    text = process(text, text_len, tokens, &tokens_len);
+    text = process_text(text, text_len, tokens, &tokens_len);
 
     text_len = strlen(text);
 
@@ -465,6 +432,8 @@ uint32_t identify(uint8_t *text, result_t *result) {
                 if (name || len >= 6) {
                     print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
 
+                    memset(result, 0, sizeof(result_t));
+
                     if (name) {
                         printf("Found name: %s\n", name);
                         memcpy(result->name, name, name_len);
@@ -473,7 +442,11 @@ uint32_t identify(uint8_t *text, result_t *result) {
 
                     get_ngram_str(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start,
                                   result->title, sizeof(result->title));
-                    db_get_identifiers(id, result->identifiers, sizeof(result->identifiers));
+
+                    if(id) {
+                        db_get_identifiers(id, result->identifiers, sizeof(result->identifiers));
+                    }
+
                     free(text);
                     return 1;
                 }
@@ -487,5 +460,5 @@ uint32_t identify(uint8_t *text, result_t *result) {
 }
 
 uint32_t load() {
-    load_hashtable(rows);
+    db_load_hashtable(rows);
 }
