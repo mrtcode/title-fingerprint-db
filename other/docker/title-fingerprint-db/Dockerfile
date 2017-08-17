@@ -49,9 +49,9 @@ RUN apt-get update \
     && make \
     && make install \
 
-    && ldconfig \
+    && ldconfig
 
-    && cd /tmp  \
+RUN cd /tmp \
     && git clone https://github.com/mrtcode/title-fingerprint-db \
     && cd title-fingerprint-db \
     && mkdir release \

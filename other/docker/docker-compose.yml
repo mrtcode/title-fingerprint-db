@@ -1,11 +1,12 @@
 version: "2"
 services:
   title-fingerprint-db:
-    build: ./
+    build: ./title-fingerprint-db
     volumes:
       - ./db:/data/db
     ports:
-      - "localhost:8003:80"
+      - 8004:80
+    stop_grace_period: 999h
     networks:
       identifier:
         ipv4_address: 172.13.5.2

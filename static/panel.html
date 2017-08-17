@@ -19,7 +19,7 @@
         </p>
         <p><textarea id="index_title" type="text" style="width:100%;height:50px;" placeholder="Title"></textarea></p>
         <p><input id="index_name" type="text" placeholder="Last name"></p>
-        <p><input id="index_ids" type="text" placeholder="id1,id2,id3"></p>
+        <p><input id="index_identifiers" type="text" placeholder="id1,id2,id3"></p>
         <p id="index_result"></p>
     </div>
 
@@ -89,7 +89,7 @@
             body: JSON.stringify([{
                 title: document.getElementById('index_title').value,
                 name: document.getElementById('index_name').value,
-                ids: document.getElementById('index_ids').value
+                identifiers: document.getElementById('index_identifiers').value
             }])
         })
             .then(function (res) {

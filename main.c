@@ -21,15 +21,14 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include <sys/time.h>
 #include <signal.h>
 #include <pthread.h>
 #include <onion/onion.h>
 #include <onion/block.h>
-#include <jansson.h>
-#include <unicode/ustdio.h>
-#include <string.h>
 #include <onion/exportlocal.h>
+#include <jansson.h>
 #include "hashtable.h"
 #include "db.h"
 
@@ -38,7 +37,6 @@ extern struct timeval t_updated;
 extern uint32_t identifiers_in_transaction;
 
 onion *on = NULL;
-
 pthread_rwlock_t rwlock;
 
 onion_connection_status url_identify(void *_, onion_request *req, onion_response *res) {
@@ -73,10 +71,11 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
 
 
     result_t result;
+    uint32_t rc;
     pthread_rwlock_rdlock(&rwlock);
 
     gettimeofday(&st, NULL);
-    identify(text, &result);
+    rc = identify(text, &result);
     gettimeofday(&et, NULL);
 
     pthread_rwlock_unlock(&rwlock);
@@ -84,11 +83,15 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
     uint32_t elapsed = ((et.tv_sec - st.tv_sec) * 1000000) + (et.tv_usec - st.tv_usec);
 
     json_t *obj = json_object();
-    json_object_set_new(obj, "time", json_integer(elapsed));
-    json_object_set(obj, "title", json_string(result.title));
-    json_object_set(obj, "name", json_string(result.name));
-    json_object_set(obj, "identifiers", json_string(result.identifiers));
 
+    if(rc) {
+        json_object_set_new(obj, "time", json_integer(elapsed));
+        json_object_set(obj, "title", json_string(result.title));
+        json_object_set(obj, "name", json_string(result.name));
+        json_object_set(obj, "identifiers", json_string(result.identifiers));
+    } else {
+        json_object_set(obj, "error", json_boolean(1));
+    }
 
     char *str = json_dumps(obj, JSON_INDENT(1) | JSON_PRESERVE_ORDER);
     json_decref(obj);
@@ -114,7 +117,6 @@ onion_connection_status url_index(void *_, onion_request *req, onion_response *r
         json_t *root;
         json_error_t error;
 
-        //printf("len: %u\n", strlen(data));
         root = json_loads(data, 0, &error);
 
         if (!root) {
@@ -142,14 +144,9 @@ onion_connection_status url_index(void *_, onion_request *req, onion_response *r
         }
         pthread_rwlock_unlock(&rwlock);
 
-
         json_decref(root);
 
         gettimeofday(&et, NULL);
-
-
-        uint32_t elapsed = ((et.tv_sec - st.tv_sec) * 1000000) + (et.tv_usec - st.tv_usec);
-
 
         json_t *obj = json_object();
         json_object_set_new(obj, "indexed", json_integer(indexed));
@@ -160,8 +157,6 @@ onion_connection_status url_index(void *_, onion_request *req, onion_response *r
         onion_response_set_header(res, "Content-Type", "application/json; charset=utf-8");
         onion_response_printf(res, str);
         free(str);
-
-
     }
 
     return OCS_PROCESSED;;
@@ -173,7 +168,6 @@ onion_connection_status url_stats(void *_, onion_request *req, onion_response *r
     json_object_set(obj, "used_hashes", json_integer(stats.used_hashes));
     json_object_set(obj, "used_slots", json_integer(stats.used_slots));
     json_object_set(obj, "max_slots", json_integer(stats.max_slots));
-
 
     char *str = json_dumps(obj, JSON_INDENT(1) | JSON_PRESERVE_ORDER);
     json_decref(obj);
@@ -191,7 +185,7 @@ int save() {
     db_save_identifiers();
     db_save_hashtable(rows, HASHTABLE_SIZE);
     pthread_rwlock_unlock(&rwlock);
-    printf("..saving done\n");
+    printf("..saved\n");
 }
 
 void *saver_thread(void *arg) {
@@ -222,19 +216,18 @@ void signal_handler(int signum) {
         onion_listen_stop(on);
     }
 
-    printf("saving db\n");
     save();
-    printf("closing db\n");
     if (!db_close()) {
         fprintf(stderr, "db close failed\n");
         return;
     }
 
+    fprintf(stderr, "exit\n");
     exit(EXIT_SUCCESS);
 }
 
 void print_usage() {
-    printf("Missing parameters. Example:\ntitle-fingerprint-db -d /var/db -p 8080\n");
+    printf("Missing parameters.\n Usage example:\ntitle-fingerprint-db -d /var/db -p 8080\n");
 }
 
 int main(int argc, char **argv) {
@@ -259,7 +252,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    printf("starting..\n");
     init_icu();
 
     if (!db_init(opt_db_directory)) {
@@ -277,7 +269,6 @@ int main(int argc, char **argv) {
 
 
     stats_t stats = get_stats();
-
     printf("used_hashes=%u, used_slots=%u, max_slots=%u\n",
            stats.used_hashes, stats.used_slots, stats.max_slots);
 

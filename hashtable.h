@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define HASHTABLE_SIZE 16777216
-#define ROW_SLOTS_MAX 65536
+#define ROW_SLOTS_MAX 256
 #define MAX_SLOTS_PER_TITLE 5
 #define MAX_TITLE_LEN 1024
 #define MAX_NAME_LEN 64
@@ -17,6 +17,7 @@ typedef struct stats {
     uint8_t slots_dist[ROW_SLOTS_MAX + 1];
 } stats_t;
 
+// 32 + 30 + 28 + 6
 #pragma pack(push, 1)
 typedef struct slot {
     uint32_t hash32;
@@ -48,7 +49,7 @@ typedef struct result {
 
 uint32_t init_icu();
 uint32_t identify(uint8_t *text, result_t *result);
-uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *ids);
+uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers);
 uint32_t load();
 stats_t get_stats();
 

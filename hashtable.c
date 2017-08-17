@@ -22,24 +22,23 @@
 
 #include <stdio.h>
 #include <stdint.h>
-//#include <stdlib.h>
 #include <unicode/ustdio.h>
 #include <unicode/ubrk.h>
+#include <unicode/ustring.h>
 #include <string.h>
+#include <sys/time.h>
+#include <jemalloc/jemalloc.h>
 
 #define XXH_STATIC_LINKING_ONLY
-
 #include "xxhash.h"
 
 #include "hashtable.h"
 #include "db.h"
 
-#include "unicode/ustring.h"
-#include <sys/time.h>
-#include <jemalloc/jemalloc.h>
-
 row_t rows[HASHTABLE_SIZE] = {0};
 struct timeval t_updated = {0};
+extern uint32_t last_meta_id;
+//uint32_t indexed = 0;
 
 UTransliterator *transliterator;
 UConverter *converter;
@@ -67,19 +66,19 @@ uint32_t init_icu() {
     uint32_t ustr_len = 0;
     u_strFromUTF8(ustr, sizeof(ustr), &ustr_len, str, strlen(str), &status);
     if (status != U_ZERO_ERROR) {
-        printf("u_strFromUTF8 failed, error=%s\n", u_errorName(status));
+        fprintf(stderr, "u_strFromUTF8 failed, error=%s\n", u_errorName(status));
         return 0;
     }
 
     transliterator = utrans_openU(ustr, ustr_len, UTRANS_FORWARD, NULL, 0, NULL, &status);
     if (status != U_ZERO_ERROR) {
-        printf("utrans_openU failed, error=%s\n", u_errorName(status));
+        fprintf(stderr, "utrans_openU failed, error=%s\n", u_errorName(status));
         return 0;
     }
 
     converter = ucnv_open("UTF-8", &status);
     if (status != U_ZERO_ERROR) {
-        printf("ucnv_open failed, error=%s\n", u_errorName(status));
+        fprintf(stderr, "ucnv_open failed, error=%s\n", u_errorName(status));
         return 0;
     }
     return 1;
@@ -89,22 +88,54 @@ uint8_t *process_text(uint8_t *text, uint32_t text_len, token_t *tokens, uint32_
     UErrorCode status = U_ZERO_ERROR;
 
     uint32_t target_len = UCNV_GET_MAX_BYTES_FOR_STRING(text_len, ucnv_getMaxCharSize(converter));
-    UChar *uc1 = malloc(target_len);
+    UChar *uc1;
+    if (!(uc1 = malloc(target_len))) {
+        fprintf(stderr, "uc1 malloc failed");
+        return 0;
+    }
+
     ucnv_toUChars(converter, uc1, target_len, text, text_len, &status);
+    if (status != U_ZERO_ERROR) {
+        fprintf(stderr, "ucnv_toUChars failed, error=%s\n", u_errorName(status));
+        return 0;
+    }
 
     uint32_t limit = u_strlen(uc1);
     utrans_transUChars(transliterator, uc1, 0, target_len, 0, &limit, &status);
+    if (status != U_ZERO_ERROR) {
+        fprintf(stderr, "utrans_transUChars failed, error=%s\n", u_errorName(status));
+        return 0;
+    }
 
-    char *target = malloc(target_len);
+    char *target;
+    if (!(target = malloc(target_len))) {
+        fprintf(stderr, "target malloc failed");
+        return 0;
+    }
+
     ucnv_fromUChars(converter, target, target_len, uc1, limit, &status);
+    if (status != U_ZERO_ERROR) {
+        fprintf(stderr, "ucnv_fromUChars failed, error=%s\n", u_errorName(status));
+        return 0;
+    }
 
 
     UBreakIterator *bi = NULL;
     bi = ubrk_open(UBRK_WORD, 0, NULL, 0, &status);
+    if (status != U_ZERO_ERROR) {
+        //fprintf(stderr, "ubrk_open failed, error=%s\n", u_errorName(status));
+        //return 0;
+    }
+
+    status = U_ZERO_ERROR;
 
     *tokens_len = 0;
 
     ubrk_setText(bi, uc1, limit, &status);
+    if (status != U_ZERO_ERROR) {
+        fprintf(stderr, "ubrk_setText failed, error=%s\n", u_errorName(status));
+        return 0;
+    }
     uint32_t start = 0, pos;
     while ((pos = ubrk_next(bi)) != UBRK_DONE) {
         if (ubrk_getRuleStatus(bi) != UBRK_WORD_NONE) {
@@ -155,17 +186,17 @@ uint32_t add_slot(uint64_t hash, uint64_t data) {
 
     if (row->len) {
         if (row->len >= ROW_SLOTS_MAX) {
-            printf("Slot error");
+            fprintf(stderr, "reached ROW_SLOTS_MAX limit");
             return 0;
         }
         if (!(row->slots = realloc(row->slots, sizeof(slot_t) * (row->len + 1)))) {
-            printf("err");
+            fprintf(stderr, "slot realloc failed");
             return 0;
         };
         row->updated = 1;
     } else {
         if (!(row->slots = malloc(sizeof(slot_t)))) {
-            printf("err");
+            fprintf(stderr, "slot malloc failed");
             return 0;
         }
         row->updated = 1;
@@ -178,9 +209,6 @@ uint32_t add_slot(uint64_t hash, uint64_t data) {
     row->len++;
     return 1;
 }
-
-
-uint32_t indexed = 0;
 
 void print_ngram(uint8_t *text, token_t *tokens, uint32_t start, uint32_t len) {
     for (uint32_t i = start; i < start + len; i++) {
@@ -210,18 +238,12 @@ uint8_t *get_ngram_str(uint8_t *text, token_t *tokens, uint32_t ngram_start,
     return str;
 }
 
-// 32 + 30 + 28 + 6
-
-
 uint32_t get_name_hash28(uint8_t *name, uint8_t name_len) {
     XXH64_state_t state64;
     XXH64_reset(&state64, 0);
     XXH64_update(&state64, name, name_len);
     return (uint32_t) (XXH64_digest(&state64) & 0xFFFFFFF);
 }
-
-extern uint32_t last_meta_id;
-
 
 uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     uint32_t title_len = strlen(title);
@@ -231,17 +253,19 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
 
     if (title_len > MAX_TITLE_LEN) return 0;
 
-
     static token_t tokens[MAX_TITLE_LEN];
     uint32_t tokens_len;
 
-    title = process_text(title, title_len, tokens, &tokens_len);
-
+    if (!(title = process_text(title, title_len, tokens, &tokens_len))) {
+        return 0;
+    }
 
     static token_t name_tokens[MAX_NAME_LEN];
     uint32_t name_tokens_len;
 
-    name = process_text(name, name_len, name_tokens, &name_tokens_len);
+    if (!(name = process_text(name, name_len, name_tokens, &name_tokens_len))) {
+        return 0;
+    }
 
     //print_ngram(title, tokens, 0, tokens_len);
     uint64_t hash = get_ngram_hash56(title, tokens, 0, tokens_len);
@@ -261,11 +285,10 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     name_fingerprint = (((uint64_t) name_hash28) << 6) | extracted_name_len;
 
     uint32_t meta_id = 0;
-    uint8_t article_exists = 0;
+    uint8_t meta_exists = 0;
     for (uint32_t i = 0; i < slots_len; i++) {
         if ((slots[i].data & 0x3FFFFFFFF) == name_fingerprint) {
-            printf("article already exists\n");
-            article_exists = 1;
+            meta_exists = 1;
             meta_id = slots[i].data >> 34;
             break;
         }
@@ -282,10 +305,9 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     }
 
 
-
     uint32_t inserted = 0;
 
-    if(identifiers) {
+    if (identifiers) {
         uint8_t *p = identifiers;
         uint8_t *s;
 
@@ -303,9 +325,9 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
         }
     }
 
-    if(!article_exists) {
+    if (!meta_exists) {
         if (!inserted) {
-            // Don't set article_id for titles that don't have any identifiers associated
+            // Don't set meta_id for titles that don't have any identifiers associated
             last_meta_id--;
             meta_id = 0;
         }
@@ -318,10 +340,10 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     free(name);
     gettimeofday(&t_updated, NULL);
 
-    indexed++;
-    if (indexed % 10000 == 0) {
-        printf("%d\n", indexed);
-    }
+//    indexed++;
+//    if (indexed % 10000 == 0) {
+//        printf("%d\n", indexed);
+//    }
 
     return 1;
 }
@@ -384,7 +406,9 @@ uint32_t identify(uint8_t *text, result_t *result) {
     token_t tokens[MAX_LOOKUP_TEXT_LEN];
     uint32_t tokens_len;
 
-    text = process_text(text, text_len, tokens, &tokens_len);
+    if (!(text = process_text(text, text_len, tokens, &tokens_len))) {
+        return 0;
+    }
 
     text_len = strlen(text);
 
@@ -406,7 +430,6 @@ uint32_t identify(uint8_t *text, result_t *result) {
             uint64_t hash = get_ngram_hash56(text, tokens, start, len);
             //printf("Index hash: %" PRId64 "\n", hash);
             //print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
-
 
             slot_t slots[MAX_SLOTS_PER_TITLE];
             uint8_t slots_len;
@@ -430,12 +453,11 @@ uint32_t identify(uint8_t *text, result_t *result) {
 
                 // If author name is found or a title has at least 6 tokens
                 if (name || len >= 6) {
-                    print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
+                    //print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
 
                     memset(result, 0, sizeof(result_t));
 
                     if (name) {
-                        printf("Found name: %s\n", name);
                         memcpy(result->name, name, name_len);
                         *(result->name + name_len) = 0;
                     }
@@ -443,7 +465,7 @@ uint32_t identify(uint8_t *text, result_t *result) {
                     get_ngram_str(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start,
                                   result->title, sizeof(result->title));
 
-                    if(id) {
+                    if (id) {
                         db_get_identifiers(id, result->identifiers, sizeof(result->identifiers));
                     }
 
@@ -456,7 +478,7 @@ uint32_t identify(uint8_t *text, result_t *result) {
     }
 
     free(text);
-    return 0;
+    return 1;
 }
 
 uint32_t load() {
