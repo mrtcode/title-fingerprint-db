@@ -29,10 +29,6 @@
 #include "hashtable.h"
 #include "db.h"
 
-char db_path_hashtable[PATH_MAX];
-char db_path_identifiers[PATH_MAX];
-
-
 sqlite3 *sqlite;
 sqlite3 *sqlite_identifiers;
 sqlite3 *sqlite_identifiers_read;
@@ -43,20 +39,22 @@ sqlite3_stmt *insert_stmt = 0;
 
 int db_init(char *directory) {
     int rc;
+    char path_hashtable[PATH_MAX];
+    char path_identifiers[PATH_MAX];
 
-    snprintf(db_path_hashtable, sizeof(db_path_hashtable), "%s/hashtable.sqlite", directory);
-    snprintf(db_path_identifiers, sizeof(db_path_hashtable), "%s/identifiers.sqlite", directory);
+    snprintf(path_hashtable, PATH_MAX, "%s/hashtable.sqlite", directory);
+    snprintf(path_identifiers, PATH_MAX, "%s/identifiers.sqlite", directory);
 
-    if ((rc=sqlite3_config(SQLITE_CONFIG_SERIALIZED)) != SQLITE_OK) {
+    if ((rc = sqlite3_config(SQLITE_CONFIG_SERIALIZED)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_config: (%i)\n", rc);
         return 0;
     }
 
-    if(!db_init_hashtable()) {
+    if (!db_init_hashtable(path_hashtable)) {
         return 0;
     }
 
-    if(!db_init_identifiers()) {
+    if (!db_init_identifiers(path_identifiers)) {
         return 0;
     }
 
@@ -88,12 +86,12 @@ int db_close() {
     return 1;
 }
 
-int db_init_hashtable() {
+int db_init_hashtable(char *path) {
     char *sql;
     int rc;
     char *err_msg;
-    if ((rc = sqlite3_open(db_path_hashtable, &sqlite)) != SQLITE_OK) {
-        fprintf(stderr, "sqlite3_open: %s (%d): %s\n", db_path_hashtable, rc, sqlite3_errmsg(sqlite));
+    if ((rc = sqlite3_open(path, &sqlite)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_open: %s (%d): %s\n", path, rc, sqlite3_errmsg(sqlite));
         return 0;
     }
 
@@ -107,13 +105,13 @@ int db_init_hashtable() {
     return 1;
 }
 
-int db_init_identifiers() {
+int db_init_identifiers(char *path) {
     char *sql;
     int rc;
     char *err_msg = 0;
 
-    if ((rc = sqlite3_open(db_path_identifiers, &sqlite_identifiers)) != SQLITE_OK) {
-        fprintf(stderr, "sqlite3_open: %s (%d): %s\n", db_path_identifiers, rc, sqlite3_errmsg(sqlite_identifiers));
+    if ((rc = sqlite3_open(path, &sqlite_identifiers)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_open: %s (%d): %s\n", path, rc, sqlite3_errmsg(sqlite_identifiers));
         return 0;
     }
 
@@ -145,7 +143,6 @@ int db_init_identifiers() {
         return 0;
     }
 
-
     sqlite3_stmt *stmt = NULL;
     sql = "SELECT MAX(meta_id) FROM identifiers";
     if ((rc = sqlite3_prepare_v2(sqlite_identifiers, sql, -1, &stmt, NULL)) != SQLITE_OK) {
@@ -153,14 +150,16 @@ int db_init_identifiers() {
         return 0;
     }
 
-    uint32_t id = 0;
-    if ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        id = sqlite3_column_int(stmt, 0);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        last_meta_id = (uint32_t) sqlite3_column_int(stmt, 0);
+    } else {
+        fprintf(stderr, "identifiers db is empty");
     }
 
-    last_meta_id = id;
-
-    sqlite3_finalize(stmt);
+    if ((rc = sqlite3_finalize(stmt)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_finalize: (%d): %s\n", rc, sqlite3_errmsg(sqlite));
+        return 0;
+    }
 
     sql = "BEGIN TRANSACTION";
     if ((rc = sqlite3_exec(sqlite_identifiers, sql, NULL, NULL, &err_msg)) != SQLITE_OK) {
@@ -175,8 +174,8 @@ int db_init_identifiers() {
         return 0;
     }
 
-    if ((rc = sqlite3_open(db_path_identifiers, &sqlite_identifiers_read)) != SQLITE_OK) {
-        fprintf(stderr, "sqlite3_open: %s (%d): %s\n", db_path_identifiers, rc, sqlite3_errmsg(sqlite_identifiers_read));
+    if ((rc = sqlite3_open(path, &sqlite_identifiers_read)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_open: %s (%d): %s\n", path, rc, sqlite3_errmsg(sqlite_identifiers_read));
         return 0;
     }
 
@@ -189,19 +188,14 @@ int db_save_identifiers() {
     int rc;
 
     sql = "END TRANSACTION";
-    if (sqlite3_exec(sqlite_identifiers, sql, NULL, NULL, &err_msg) != SQLITE_OK) {
+    if ((rc = sqlite3_exec(sqlite_identifiers, sql, NULL, NULL, &err_msg)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_exec: %s (%i): %s\n", sql, rc, sqlite3_errmsg(sqlite_identifiers));
         sqlite3_free(err_msg);
         return 0;
     }
 
-//    if ((rc = sqlite3_wal_checkpoint(sqlite_identifiers, NULL)) != SQLITE_OK) {
-//        fprintf(stderr, "sqlite3_wal_autocheckpoint: (%i): %s\n", rc, sqlite3_errmsg(sqlite_identifiers));
-//        return 0;
-//    }
-
     sql = "BEGIN TRANSACTION";
-    if (sqlite3_exec(sqlite_identifiers, sql, NULL, NULL, &err_msg) != SQLITE_OK) {
+    if ((rc = sqlite3_exec(sqlite_identifiers, sql, NULL, NULL, &err_msg)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_exec: %s (%i): %s\n", sql, rc, sqlite3_errmsg(sqlite_identifiers));
         sqlite3_free(err_msg);
         return 0;
@@ -212,12 +206,12 @@ int db_save_identifiers() {
 int db_insert_identifier(uint32_t meta_id, uint8_t *identifier, uint32_t identifier_len) {
     int rc;
 
-    if ((rc=sqlite3_bind_int(insert_stmt, 1, meta_id)) != SQLITE_OK) {
+    if ((rc = sqlite3_bind_int(insert_stmt, 1, meta_id)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_bind_int: (%i): %s\n", rc, sqlite3_errmsg(sqlite_identifiers));
         return 0;
     }
 
-    if ((rc=sqlite3_bind_text(insert_stmt, 2, identifier, identifier_len, SQLITE_STATIC)) != SQLITE_OK) {
+    if ((rc = sqlite3_bind_text(insert_stmt, 2, identifier, identifier_len, SQLITE_STATIC)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_bind_text: (%i): %s\n", rc, sqlite3_errmsg(sqlite_identifiers));
         return 0;
     }
@@ -251,22 +245,25 @@ int db_get_identifiers(uint32_t id, uint8_t *identifiers, uint32_t identifiers_m
         return 0;
     }
 
-    if ((rc=sqlite3_bind_int(stmt, 1, id)) != SQLITE_OK) {
+    if ((rc = sqlite3_bind_int(stmt, 1, id)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_bind_int: (%i): %s\n", rc, sqlite3_errmsg(sqlite_identifiers_read));
         return 0;
     }
 
-    if ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
         uint8_t *row_identifiers = sqlite3_column_blob(stmt, 0);
-        uint32_t row_identifiers_len = sqlite3_column_bytes(stmt, 0);
-        if(row_identifiers_len>identifiers_max_len-1) {
-            row_identifiers_len = identifiers_max_len-1;
+        uint32_t row_identifiers_len = (uint32_t) sqlite3_column_bytes(stmt, 0);
+        if (row_identifiers_len > identifiers_max_len - 1) {
+            row_identifiers_len = identifiers_max_len - 1;
         }
         memcpy(identifiers, row_identifiers, row_identifiers_len);
         *(identifiers + row_identifiers_len) = 0;
     }
 
-    sqlite3_finalize(stmt);
+    if ((rc = sqlite3_finalize(stmt)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_finalize: (%d): %s\n", rc, sqlite3_errmsg(sqlite));
+        return 0;
+    }
     return 1;
 }
 
@@ -328,7 +325,11 @@ int db_save_hashtable(row_t *rows, uint32_t rows_len) {
         return 0;
     }
 
-    sqlite3_finalize(stmt);
+    if ((rc = sqlite3_finalize(stmt)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_finalize: (%d): %s\n", rc, sqlite3_errmsg(sqlite));
+        return 0;
+    }
+
     return 1;
 }
 
@@ -344,9 +345,9 @@ int db_load_hashtable(row_t *rows) {
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (sqlite3_column_count(stmt) == 2) {
-            uint32_t id = sqlite3_column_int(stmt, 0);
+            uint32_t id = (uint32_t) sqlite3_column_int(stmt, 0);
             uint8_t *data = sqlite3_column_blob(stmt, 1);
-            int len = sqlite3_column_bytes(stmt, 1);
+            uint32_t len = (uint32_t) sqlite3_column_bytes(stmt, 1);
 
             if (id >= HASHTABLE_SIZE) continue;
 
@@ -360,6 +361,10 @@ int db_load_hashtable(row_t *rows) {
         fprintf(stderr, "sqlite3_step: (%i): %s\n", rc, sqlite3_errmsg(sqlite));
     }
 
-    sqlite3_finalize(stmt);
+    if ((rc = sqlite3_finalize(stmt)) != SQLITE_OK) {
+        fprintf(stderr, "sqlite3_finalize: (%d): %s\n", rc, sqlite3_errmsg(sqlite));
+        return 0;
+    }
+
     return 1;
 }

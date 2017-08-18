@@ -67,10 +67,8 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
     }
 
     uint8_t *text = json_string_value(json_text);
-    uint32_t text_len = json_string_length(json_text);
 
     struct timeval st, et;
-
 
     result_t result;
     uint32_t rc;
@@ -195,7 +193,10 @@ void *saver_thread(void *arg) {
 
     while (1) {
         usleep(10000);
+
+        // Force flush because otherwise Docker doesn't output logs
         fflush(stdout);
+        fflush(stderr);
 
         if (!t_updated.tv_sec) {
             continue;
@@ -225,11 +226,15 @@ void signal_handler(int signum) {
     }
 
     fprintf(stderr, "exit\n");
+
+    // Force flush because otherwise Docker doesn't output logs
+    fflush(stdout);
+    fflush(stderr);
     exit(EXIT_SUCCESS);
 }
 
 void print_usage() {
-    printf("Missing parameters.\n Usage example:\ntitle-fingerprint-db -d /var/db -p 8080\n");
+    printf("Missing parameters.\nUsage example:\ntitle-fingerprint-db -d /var/db -p 8080\n");
 }
 
 int main(int argc, char **argv) {
@@ -246,6 +251,9 @@ int main(int argc, char **argv) {
             case 'p':
                 opt_port = optarg;
                 break;
+            default:
+                print_usage();
+                return EXIT_FAILURE;
         }
     }
 

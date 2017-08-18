@@ -27,7 +27,6 @@
 #include <string.h>
 #include <sys/time.h>
 #include <jemalloc/jemalloc.h>
-#include <inttypes.h>
 
 #define XXH_STATIC_LINKING_ONLY
 
@@ -308,7 +307,7 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     }
 
     uint32_t meta_id = 0;
-    if(slot_meta_id) {
+    if (slot_meta_id) {
         meta_id = slot_meta_id;
     } else {
         meta_id = new_meta_id;
