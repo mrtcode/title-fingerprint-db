@@ -29,6 +29,8 @@
 #include <onion/block.h>
 #include <onion/exportlocal.h>
 #include <jansson.h>
+#include <unicode/utf.h>
+#include <unicode/uchar.h>
 #include "hashtable.h"
 #include "db.h"
 
@@ -84,7 +86,7 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
 
     json_t *obj = json_object();
 
-    if(rc) {
+    if (rc) {
         json_object_set_new(obj, "time", json_integer(elapsed));
         json_object_set(obj, "title", json_string(result.title));
         json_object_set(obj, "name", json_string(result.name));

@@ -48,6 +48,8 @@ typedef struct result {
 } result_t;
 
 uint32_t init_icu();
+uint8_t *process_text(uint8_t *text, uint32_t text_len, token_t *tokens, uint32_t *tokens_len);
+void print_ngram(uint8_t *text, token_t *tokens, uint32_t start, uint32_t len);
 uint32_t identify(uint8_t *text, result_t *result);
 uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers);
 uint32_t load();

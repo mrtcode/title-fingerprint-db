@@ -23,13 +23,14 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <unicode/ustdio.h>
-#include <unicode/ubrk.h>
 #include <unicode/ustring.h>
 #include <string.h>
 #include <sys/time.h>
 #include <jemalloc/jemalloc.h>
+#include <inttypes.h>
 
 #define XXH_STATIC_LINKING_ONLY
+
 #include "xxhash.h"
 
 #include "hashtable.h"
@@ -87,70 +88,65 @@ uint32_t init_icu() {
 uint8_t *process_text(uint8_t *text, uint32_t text_len, token_t *tokens, uint32_t *tokens_len) {
     UErrorCode status = U_ZERO_ERROR;
 
-    uint32_t target_len = UCNV_GET_MAX_BYTES_FOR_STRING(text_len, ucnv_getMaxCharSize(converter));
+    uint32_t text2_len = UCNV_GET_MAX_BYTES_FOR_STRING(text_len, ucnv_getMaxCharSize(converter));
     UChar *uc1;
-    if (!(uc1 = malloc(target_len))) {
+    if (!(uc1 = malloc(text2_len))) {
         fprintf(stderr, "uc1 malloc failed");
         return 0;
     }
 
-    ucnv_toUChars(converter, uc1, target_len, text, text_len, &status);
+    ucnv_toUChars(converter, uc1, text2_len, text, text_len, &status);
     if (status != U_ZERO_ERROR) {
         fprintf(stderr, "ucnv_toUChars failed, error=%s\n", u_errorName(status));
         return 0;
     }
 
     uint32_t limit = u_strlen(uc1);
-    utrans_transUChars(transliterator, uc1, 0, target_len, 0, &limit, &status);
+    utrans_transUChars(transliterator, uc1, 0, text2_len, 0, &limit, &status);
     if (status != U_ZERO_ERROR) {
         fprintf(stderr, "utrans_transUChars failed, error=%s\n", u_errorName(status));
         return 0;
     }
 
-    char *target;
-    if (!(target = malloc(target_len))) {
-        fprintf(stderr, "target malloc failed");
+    char *text2;
+    if (!(text2 = malloc(text2_len))) {
+        fprintf(stderr, "text2 malloc failed");
         return 0;
     }
 
-    ucnv_fromUChars(converter, target, target_len, uc1, limit, &status);
+    ucnv_fromUChars(converter, text2, text2_len, uc1, limit, &status);
     if (status != U_ZERO_ERROR) {
         fprintf(stderr, "ucnv_fromUChars failed, error=%s\n", u_errorName(status));
         return 0;
     }
 
-
-    UBreakIterator *bi = NULL;
-    bi = ubrk_open(UBRK_WORD, 0, NULL, 0, &status);
-    if (status != U_ZERO_ERROR) {
-        //fprintf(stderr, "ubrk_open failed, error=%s\n", u_errorName(status));
-        //return 0;
-    }
-
-    status = U_ZERO_ERROR;
+    free(uc1);
 
     *tokens_len = 0;
 
-    ubrk_setText(bi, uc1, limit, &status);
-    if (status != U_ZERO_ERROR) {
-        fprintf(stderr, "ubrk_setText failed, error=%s\n", u_errorName(status));
-        return 0;
-    }
-    uint32_t start = 0, pos;
-    while ((pos = ubrk_next(bi)) != UBRK_DONE) {
-        if (ubrk_getRuleStatus(bi) != UBRK_WORD_NONE) {
-            tokens[*tokens_len].start = start;
-            tokens[*tokens_len].len = pos - start;
-            (*tokens_len)++;
+    uint32_t start, s, i = 0;
+    UChar32 c;
+    uint8_t in_token = 0;
+
+    do {
+        s = i;
+        U8_NEXT(text2, i, -1, c);
+        if (u_isUAlphabetic(c) || u_isdigit(c)) {
+            if (!in_token) {
+                start = s;
+                tokens[*tokens_len].start = start;
+                in_token = 1;
+            }
+        } else {
+            if (in_token) {
+                tokens[*tokens_len].len = s - start;
+                (*tokens_len)++;
+                in_token = 0;
+            }
         }
-        start = pos;
-    }
+    } while (c > 0);
 
-    ubrk_close(bi);
-
-    free(uc1);
-
-    return target;
+    return text2;
 }
 
 uint64_t get_ngram_hash56(uint8_t *text, token_t *tokens, uint32_t start, uint32_t len) {
@@ -164,7 +160,12 @@ uint64_t get_ngram_hash56(uint8_t *text, token_t *tokens, uint32_t start, uint32
     return (XXH64_digest(&state64)) >> 8;
 }
 
-uint8_t get_hash_slots(uint64_t hash, slot_t *slots, uint8_t *slots_len) {
+row_t *get_row(uint64_t hash) {
+    uint32_t hash24 = (uint32_t) (hash >> 32);
+    return rows + hash24;
+}
+
+uint8_t get_hash_slots(uint64_t hash, slot_t **slots, uint8_t *slots_len) {
     *slots_len = 0;
     uint32_t hash24 = (uint32_t) (hash >> 32);
     uint32_t hash32 = (uint32_t) (hash & 0xFFFFFFFF);
@@ -172,7 +173,7 @@ uint8_t get_hash_slots(uint64_t hash, slot_t *slots, uint8_t *slots_len) {
     if (row->len) {
         for (uint32_t i = 0; i < row->len; i++) {
             if (row->slots[i].hash32 == hash32) {
-                slots[(*slots_len)++] = row->slots[i];
+                slots[(*slots_len)++] = &row->slots[i];
             }
         }
     }
@@ -272,7 +273,7 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
 
     //printf("Index hash: %" PRId64 "\n", hash);
 
-    slot_t slots[MAX_SLOTS_PER_TITLE];
+    slot_t *slots[MAX_SLOTS_PER_TITLE];
     uint8_t slots_len;
 
     get_hash_slots(hash, slots, &slots_len);
@@ -284,26 +285,34 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     uint32_t name_hash28 = get_name_hash28(name + extracted_name_start, extracted_name_len);
     name_fingerprint = (((uint64_t) name_hash28) << 6) | extracted_name_len;
 
-    uint32_t meta_id = 0;
-    uint8_t meta_exists = 0;
+    uint32_t slot_meta_id = 0;
+    slot_t *slot = 0;
     for (uint32_t i = 0; i < slots_len; i++) {
-        if ((slots[i].data & 0x3FFFFFFFF) == name_fingerprint) {
-            meta_exists = 1;
-            meta_id = slots[i].data >> 34;
+        if ((slots[i]->data & 0x3FFFFFFFF) == name_fingerprint) {
+            slot = slots[i];
+            slot_meta_id = slots[i]->data >> 34;
             break;
         }
     }
 
-    if (!meta_id) {
-        if (slots_len >= MAX_SLOTS_PER_TITLE) {
-            free(title);
-            free(name);
-            fprintf(stderr, "reached MAX_SLOTS_PER_TITLE limit for title=\"%s\"", title);
-            return 0;
-        }
-        meta_id = ++last_meta_id;
+    if (!slot && slots_len >= MAX_SLOTS_PER_TITLE) {
+        free(title);
+        free(name);
+        fprintf(stderr, "reached MAX_SLOTS_PER_TITLE limit for title=\"%s\"", title);
+        return 0;
     }
 
+    uint32_t new_meta_id = 0;
+    if (!slot || !slot_meta_id) {
+        new_meta_id = ++last_meta_id;
+    }
+
+    uint32_t meta_id = 0;
+    if(slot_meta_id) {
+        meta_id = slot_meta_id;
+    } else {
+        meta_id = new_meta_id;
+    }
 
     uint32_t inserted = 0;
 
@@ -325,15 +334,20 @@ uint32_t index_title(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
         }
     }
 
-    if (!meta_exists) {
-        if (!inserted) {
-            // Don't set meta_id for titles that don't have any identifiers associated
-            last_meta_id--;
-            meta_id = 0;
-        }
+    if (!inserted) {
+        // Don't set meta_id for titles that don't have any identifiers associated
+        last_meta_id--;
+        new_meta_id = 0;
+    }
 
-        uint64_t data = (((uint64_t) meta_id) << 34) | name_fingerprint;
+
+    if (!slot) {
+        uint64_t data = (((uint64_t) new_meta_id) << 34) | name_fingerprint;
         add_slot(hash, data);
+    } else if (!slot_meta_id && new_meta_id) {
+        slot->data = (((uint64_t) new_meta_id) << 34) | name_fingerprint;
+        row_t *row = get_row(hash);
+        row->updated = 1;
     }
 
     free(title);
@@ -419,7 +433,7 @@ uint32_t identify(uint8_t *text, result_t *result) {
 
     uint32_t tried = 0;
     for (uint32_t i = 0; i < lines_len && tried <= 1000; i++) {
-        for (uint32_t j = i; j < i + 6 && j < lines_len; j++) {
+        for (uint32_t j = i; j < i + 5 && j < lines_len; j++) {
 
             uint32_t start = lines[i].start;
             uint32_t len = lines[j].start + lines[j].len - lines[i].start;
@@ -431,7 +445,7 @@ uint32_t identify(uint8_t *text, result_t *result) {
             //printf("Index hash: %" PRId64 "\n", hash);
             //print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
 
-            slot_t slots[MAX_SLOTS_PER_TITLE];
+            slot_t *slots[MAX_SLOTS_PER_TITLE];
             uint8_t slots_len;
             get_hash_slots(hash, slots, &slots_len);
 
@@ -441,9 +455,9 @@ uint32_t identify(uint8_t *text, result_t *result) {
                 uint8_t name_len = 0;
                 for (uint32_t k = 0; k < slots_len; k++) {
 
-                    uint32_t name_hash28 = (slots[k].data >> 6) & 0xFFFFFFF;
-                    name_len = slots[k].data & 0x3F;
-                    id = slots[k].data >> 34;
+                    uint32_t name_hash28 = (slots[k]->data >> 6) & 0xFFFFFFF;
+                    name_len = slots[k]->data & 0x3F;
+                    id = slots[k]->data >> 34;
 
                     name = locate_name(text, text_len, tokens[start].start, tokens[start].start + len - 1,
                                        name_hash28, name_len);
@@ -478,7 +492,7 @@ uint32_t identify(uint8_t *text, result_t *result) {
     }
 
     free(text);
-    return 1;
+    return 0;
 }
 
 uint32_t load() {

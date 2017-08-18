@@ -5,7 +5,7 @@ services:
     volumes:
       - ./db:/data/db
     ports:
-      - 8004:80
+      - 8003:80
     stop_grace_period: 999h
     networks:
       identifier:
