@@ -26,7 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <linux/limits.h>
-#include "hashtable.h"
+#include "ht.h"
 #include "db.h"
 
 sqlite3 *sqlite;
@@ -335,30 +335,30 @@ int db_save_hashtable(row_t *rows, uint32_t rows_len) {
 
 int db_load_hashtable(row_t *rows) {
     int rc;
-    const char sql[] = "SELECT id, data FROM hashtable";
+    char *sql;
     sqlite3_stmt *stmt = NULL;
 
+    sql = "SELECT id, data FROM hashtable";
     if ((rc = sqlite3_prepare_v2(sqlite, sql, -1, &stmt, NULL)) != SQLITE_OK) {
         fprintf(stderr, "sqlite3_prepare_v2: %s (%i): %s\n", sql, rc, sqlite3_errmsg(sqlite));
         return 0;
     }
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        if (sqlite3_column_count(stmt) == 2) {
-            uint32_t id = (uint32_t) sqlite3_column_int(stmt, 0);
-            uint8_t *data = sqlite3_column_blob(stmt, 1);
-            uint32_t len = (uint32_t) sqlite3_column_bytes(stmt, 1);
+        uint32_t id = (uint32_t) sqlite3_column_int(stmt, 0);
+        uint8_t *data = sqlite3_column_blob(stmt, 1);
+        uint32_t len = (uint32_t) sqlite3_column_bytes(stmt, 1);
 
-            if (id >= HASHTABLE_SIZE) continue;
+        if (id >= HASHTABLE_SIZE) continue;
 
-            rows[id].len = len / sizeof(slot_t);
-            rows[id].slots = malloc(len);
-            memcpy(rows[id].slots, data, len);
-        }
+        rows[id].len = len / sizeof(slot_t);
+        rows[id].slots = malloc(len);
+        memcpy(rows[id].slots, data, len);
     }
 
     if (SQLITE_DONE != rc) {
         fprintf(stderr, "sqlite3_step: (%i): %s\n", rc, sqlite3_errmsg(sqlite));
+        return 0;
     }
 
     if ((rc = sqlite3_finalize(stmt)) != SQLITE_OK) {

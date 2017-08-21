@@ -30,9 +30,9 @@
 #include <onion/exportlocal.h>
 #include <jansson.h>
 #include <unicode/utf.h>
-#include <unicode/uchar.h>
-#include "hashtable.h"
+#include "ht.h"
 #include "db.h"
+#include "text.h"
 
 extern row_t rows[HASHTABLE_SIZE];
 extern struct timeval t_updated;
@@ -75,7 +75,7 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
     pthread_rwlock_rdlock(&rwlock);
 
     gettimeofday(&st, NULL);
-    rc = identify(text, &result);
+    rc = ht_identify(text, &result);
     gettimeofday(&et, NULL);
 
     pthread_rwlock_unlock(&rwlock);
@@ -137,7 +137,7 @@ onion_connection_status url_index(void *_, onion_request *req, onion_response *r
                     uint8_t *title = json_string_value(json_title);
                     uint8_t *name = json_string_value(json_name);
                     uint8_t *identifiers = json_string_value(json_identifiers);
-                    if (index_title(title, name, identifiers))
+                    if (ht_index(title, name, identifiers))
                         indexed++;
                 }
             }
@@ -163,7 +163,7 @@ onion_connection_status url_index(void *_, onion_request *req, onion_response *r
 }
 
 onion_connection_status url_stats(void *_, onion_request *req, onion_response *res) {
-    stats_t stats = get_stats();
+    stats_t stats = ht_stats();
     json_t *obj = json_object();
     json_object_set(obj, "used_hashes", json_integer(stats.used_hashes));
     json_object_set(obj, "used_slots", json_integer(stats.used_slots));
@@ -238,7 +238,6 @@ void print_usage() {
 }
 
 int main(int argc, char **argv) {
-
     char *opt_db_directory = 0;
     char *opt_port = 0;
 
@@ -262,23 +261,25 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    init_icu();
+    setenv("ONION_LOG", "noinfo", 1);
+    pthread_rwlock_init(&rwlock, 0);
+
+    if (!text_init()) {
+        fprintf(stderr, "failed to initialize text processor\n");
+        return EXIT_FAILURE;
+    }
 
     if (!db_init(opt_db_directory)) {
         fprintf(stderr, "failed to initialize db\n");
         return EXIT_FAILURE;
     }
 
+    if (!ht_init()) {
+        fprintf(stderr, "failed to initialize hashtable\n");
+        return EXIT_FAILURE;
+    }
 
-    setenv("ONION_LOG", "noinfo", 1);
-    pthread_rwlock_init(&rwlock, 0);
-
-
-    printf("loading hashtable..\n");
-    load();
-
-
-    stats_t stats = get_stats();
+    stats_t stats = ht_stats();
     printf("used_hashes=%u, used_slots=%u, max_slots=%u\n",
            stats.used_hashes, stats.used_slots, stats.max_slots);
 
@@ -289,12 +290,12 @@ int main(int argc, char **argv) {
 
     on = onion_new(O_POOL);
 
+    // Signal handler must be initialized after onion_new
     struct sigaction action;
     memset(&action, 0, sizeof(struct sigaction));
     action.sa_handler = signal_handler;
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGTERM, &action, NULL);
-
 
     onion_set_port(on, opt_port);
     onion_set_max_threads(on, 16);
