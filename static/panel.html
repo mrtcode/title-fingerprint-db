@@ -51,10 +51,10 @@
 
                 document.getElementById('identify_result').innerHTML = html;
 
-                var crossrefUrl = 'http://api.crossref.org/works?query.title=' + data.title;
+                var crossrefUrl = 'http://api.crossref.org/works?query.title=' + encodeURIComponent(data.title);
 
                 if(data.name.length) {
-                    crossrefUrl += '&query.author=' + data.name;
+                    crossrefUrl += '&query.author=' + encodeURIComponent(data.name);
                 }
 
                 fetch(crossrefUrl, {

@@ -21,15 +21,16 @@
  */
 
 /*
- * Hashtable consists of 2^24 rows where each of can have up to 256 slots.
+ * Hashtable consists of 2^24 rows where each row can have up to 256 slots.
  * A slot takes 12 bytes which equals to 98 bits. Where 32 bits are used for title hash,
- * 30 bits 28 bits for author last name hash, and 6 bits for author last name length.
- * Title hash hash consists of a hashtable row number and another 32 bits from slot.
+ * 30 bits for meta_id, 28 bits for author last name hash, and 6 bits for author last name length.
+ * Title hash consists of a hashtable row number and another 32 bits from a slot.
  * The actual title hash keyspace is 24 + 32 = 56 bits.
  */
 
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <sys/time.h>
 #include <jemalloc/jemalloc.h>
@@ -117,33 +118,20 @@ uint32_t ht_add_slot(uint64_t hash, uint64_t data) {
 }
 
 uint32_t ht_index(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
-    uint32_t title_len = strlen(title);
-    uint32_t name_len = strlen(name);
+    char output_text[MAX_LOOKUP_TEXT_LEN];
+    uint32_t output_text_len = MAX_LOOKUP_TEXT_LEN;
+    text_process(title, output_text, &output_text_len, 0, 0, 0, 0);
 
-    if (name_len < 2) return 0;
+    uint8_t name_output[64];
+    uint32_t name_output_len = 64;
+    if (!text_process_name(name, name_output, &name_output_len)) return 0;
 
-    if (title_len < 10 || title_len > MAX_TITLE_LEN) return 0;
+    if (name_output_len < 2) return 0;
 
-    if (!(title = text_transform(title, title_len))) {
-        return 0;
-    }
+    if (output_text_len < 10 || output_text_len > MAX_TITLE_LEN) return 0;
 
-    static token_t tokens[MAX_TITLE_LEN];
-    uint32_t tokens_len;
-    text_tokens(title, tokens, &tokens_len);
-
-    if (!(name = text_transform(name, name_len))) {
-        return 0;
-    }
-
-    static token_t name_tokens[MAX_NAME_LEN];
-    uint32_t name_tokens_len;
-    text_tokens(name, name_tokens, &name_tokens_len);
-
-    //print_ngram(title, tokens, 0, tokens_len);
-    uint64_t hash = text_ngram_hash56(title, tokens, 0, tokens_len);
-
-    //printf("Index hash: %" PRId64 "\n", hash);
+    uint64_t hash = text_hash56(output_text, output_text_len);
+    printf("Index: %" PRId64 " %.*s\n", hash, output_text_len, output_text);
 
     slot_t *slots[MAX_SLOTS_PER_TITLE];
     uint8_t slots_len;
@@ -151,11 +139,8 @@ uint32_t ht_index(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     ht_hash_slots(hash, slots, &slots_len);
 
     uint64_t name_fingerprint;
-
-    uint32_t extracted_name_start = name_tokens[name_tokens_len - 1].start;
-    uint32_t extracted_name_len = name_tokens[name_tokens_len - 1].len;
-    uint32_t name_hash28 = text_hash28(name + extracted_name_start, extracted_name_len);
-    name_fingerprint = (((uint64_t) name_hash28) << 6) | extracted_name_len;
+    uint32_t name_hash28 = text_hash28(name_output, name_output_len);
+    name_fingerprint = (((uint64_t) name_hash28) << 6) | name_output_len;
 
     uint32_t slot_meta_id = 0;
     slot_t *slot = 0;
@@ -168,8 +153,6 @@ uint32_t ht_index(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     }
 
     if (!slot && slots_len >= MAX_SLOTS_PER_TITLE) {
-        free(title);
-        free(name);
         fprintf(stderr, "reached MAX_SLOTS_PER_TITLE limit for title \"%s\"", title);
         return 0;
     }
@@ -221,8 +204,6 @@ uint32_t ht_index(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
         row->updated = 1;
     }
 
-    free(title);
-    free(name);
     gettimeofday(&t_updated, NULL);
 
 //    indexed++;
@@ -233,15 +214,15 @@ uint32_t ht_index(uint8_t *title, uint8_t *name, uint8_t *identifiers) {
     return 1;
 }
 
-uint8_t *ht_locate_name(uint8_t *text, uint32_t text_len, uint32_t title_start,
-                        uint32_t title_end, uint32_t name_hash28, uint8_t name_len) {
-    int distance = 1000;
-    int pos;
+int32_t ht_locate_name(uint8_t *text, uint32_t text_len, uint32_t title_start,
+                       uint32_t title_end, uint32_t name_hash28, uint8_t name_len) {
+    int32_t distance = NAME_LOOKUP_DISTANCE;
+    int32_t pos;
 
     pos = title_end + 1;
     while (pos + name_len < text_len + 1 && pos <= title_end + distance) {
         if (text_hash28(text + pos, name_len) == name_hash28) {
-            return text + pos;
+            return pos;
         }
         pos++;
     }
@@ -249,49 +230,41 @@ uint8_t *ht_locate_name(uint8_t *text, uint32_t text_len, uint32_t title_start,
     pos = title_start - name_len;
     while (pos >= 0 && pos + distance >= title_start) {
         if (text_hash28(text + pos, name_len) == name_hash28) {
-            return text + pos;
+            return pos;
         }
         pos--;
     }
 
-    return 0;
+    return -1;
 }
 
 uint32_t ht_identify(uint8_t *text, result_t *result) {
-    uint32_t text_len = strlen(text);
-    if (!text_len) return 0;
-    if (text_len > MAX_LOOKUP_TEXT_LEN) text_len = MAX_LOOKUP_TEXT_LEN;
+    char output_text[MAX_LOOKUP_TEXT_LEN];
+    uint32_t output_text_len = MAX_LOOKUP_TEXT_LEN;
 
-    token_t tokens[MAX_LOOKUP_TEXT_LEN];
-    uint32_t tokens_len;
-
-    if (!(text = text_transform(text, text_len))) {
-        return 0;
-    }
-
-    text_len = strlen(text);
-
-    text_tokens(text, tokens, &tokens_len);
+    uint32_t map[MAX_LOOKUP_TEXT_LEN];
+    uint32_t map_len = MAX_LOOKUP_TEXT_LEN;
 
     line_t lines[MAX_LOOKUP_TEXT_LEN];
-    uint32_t lines_len;
-    text_lines(text, tokens, tokens_len, lines, &lines_len);
+    uint32_t lines_len = MAX_LOOKUP_TEXT_LEN;
+
+    text_process(text, output_text, &output_text_len, map, &map_len, lines, &lines_len);
 
     uint32_t tried = 0;
     for (uint32_t i = 0; i < lines_len && tried <= 1000; i++) {
         for (uint32_t j = i; j < i + 5 && j < lines_len; j++) {
-            uint32_t ngram_start = lines[i].start;
-            uint32_t ngram_len = lines[j].start + lines[j].len - lines[i].start;
-            uint32_t ngram_str_len = text_ngram_str_len(text, tokens, lines[i].start,
-                                                        lines[j].start + lines[j].len - lines[i].start);
+
+            uint32_t title_start = lines[i].start;
+            uint32_t title_end = lines[j].end;
+            uint32_t title_len = title_end - title_start + 1;
 
             // Title ngram must be at least 20 bytes len which results to about two normal length latin words or 5-7 chinese characters
-            // Todo: Set different threshold for ASCI (transliterated..) characters and other characters
-            if (ngram_str_len < 20 || ngram_str_len > 500) continue;
+            // Todo: Set a different threshold for ASCI (and transliterated) characters and other characters
+            if (title_len < 20 || title_len > 500) continue;
+
             tried++;
-            uint64_t hash = text_ngram_hash56(text, tokens, ngram_start, ngram_len);
-            //printf("Index hash: %" PRId64 "\n", hash);
-            //print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
+            uint64_t hash = text_hash56(output_text + title_start, title_end - title_start + 1);
+            //printf("Lookup: %" PRId64 " %.*s\n", hash, title_end-title_start+1, output_text+title_start);
 
             slot_t *slots[MAX_SLOTS_PER_TITLE];
             uint8_t slots_len;
@@ -299,44 +272,40 @@ uint32_t ht_identify(uint8_t *text, result_t *result) {
 
             if (slots_len) {
                 uint32_t id = 0;
-                uint8_t *name = 0;
+                int32_t name_pos = 0;
                 uint8_t name_len = 0;
                 for (uint32_t k = 0; k < slots_len; k++) {
                     uint32_t name_hash28 = (slots[k]->data >> 6) & 0xFFFFFFF;
                     name_len = slots[k]->data & 0x3F;
                     id = slots[k]->data >> 34;
 
-                    name = ht_locate_name(text, text_len, tokens[ngram_start].start,
-                                          tokens[ngram_start].start + ngram_len - 1,
-                                          name_hash28, name_len);
-
-                    if (name) break;
+                    name_pos = ht_locate_name(output_text, output_text_len, title_start, title_end,
+                                              name_hash28, name_len);
+                    if (name_pos) break;
                 }
 
-                // If author name is found, or a title has at least 6 tokens, or a title is at least 30 bytes len
-                if (name || ngram_len >= 6 || ngram_str_len >= 30) {
+                // TODO: If author name is found, or a title has at least 6 tokens, or a title is at least 30 bytes len
+                if (name_pos>=0 || title_len >= 40) {
                     //print_ngram(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start);
                     memset(result, 0, sizeof(result_t));
 
-                    if (name) {
-                        memcpy(result->name, name, name_len);
-                        *(result->name + name_len) = 0;
+                    if (name_pos>=0) {
+                        text_original_name(text, map, map_len, name_pos, name_pos + name_len - 1,
+                                           result->name, sizeof(result->name));
                     }
 
-                    text_ngram_str(text, tokens, lines[i].start, lines[j].start + lines[j].len - lines[i].start,
-                                   result->title, sizeof(result->title));
+                    text_original_str(text, map, map_len, title_start, title_end,
+                                      result->title, sizeof(result->title));
 
                     if (id) {
                         db_get_identifiers(id, result->identifiers, sizeof(result->identifiers));
                     }
 
-                    free(text);
                     return 1;
                 }
             }
         }
     }
 
-    free(text);
     return 0;
 }

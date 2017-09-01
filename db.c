@@ -201,6 +201,7 @@ int db_save_identifiers() {
         return 0;
     }
     identifiers_in_transaction = 0;
+    return 1;
 }
 
 int db_insert_identifier(uint32_t meta_id, uint8_t *identifier, uint32_t identifier_len) {
@@ -232,6 +233,7 @@ int db_insert_identifier(uint32_t meta_id, uint8_t *identifier, uint32_t identif
     }
 
     identifiers_in_transaction++;
+    return 1;
 }
 
 int db_get_identifiers(uint32_t id, uint8_t *identifiers, uint32_t identifiers_max_len) {

@@ -9,6 +9,7 @@
 #define MAX_TITLE_LEN 1024
 #define MAX_NAME_LEN 63
 #define MAX_LOOKUP_TEXT_LEN 4096
+#define NAME_LOOKUP_DISTANCE 1000
 
 typedef struct stats {
     uint32_t used_hashes;

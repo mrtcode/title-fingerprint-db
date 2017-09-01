@@ -30,6 +30,7 @@
 #include <onion/exportlocal.h>
 #include <jansson.h>
 #include <unicode/utf.h>
+#include <unicode/utypes.h>
 #include "ht.h"
 #include "db.h"
 #include "text.h"
@@ -90,7 +91,7 @@ onion_connection_status url_identify(void *_, onion_request *req, onion_response
         json_object_set(obj, "name", json_string(result.name));
         json_object_set(obj, "identifiers", json_string(result.identifiers));
     } else {
-        json_object_set(obj, "error", json_boolean(1));
+
     }
 
     char *str = json_dumps(obj, JSON_INDENT(1) | JSON_PRESERVE_ORDER);
